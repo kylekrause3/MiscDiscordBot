@@ -1,17 +1,203 @@
+import asyncio
+import discord
+from discord.ext import commands, tasks
+from discord.voice_client import VoiceClient
+import youtube_dl
+
+from random import choice
+
+youtube_dl.utils.bug_reports_message = lambda: ''
+
+ytdl_format_options = {
+    'format': 'bestaudio/best',
+    'outtmpl': '%(extractor)s-%(id)s-%(title)s.%(ext)s',
+    'restrictfilenames': True,
+    'noplaylist': True,
+    'nocheckcertificate': True,
+    'ignoreerrors': False,
+    'logtostderr': False,
+    'quiet': True,
+    'no_warnings': True,
+    'default_search': 'auto',
+    'source_address': '0.0.0.0' # bind to ipv4 since ipv6 addresses cause issues sometimes
+}
+
+ffmpeg_options = {
+    'options': '-vn'
+}
+
+ytdl = youtube_dl.YoutubeDL(ytdl_format_options)
+
+class YTDLSource(discord.PCMVolumeTransformer):
+    def __init__(self, source, *, data, volume=0.5):
+        super().__init__(source, volume)
+
+        self.data = data
+
+        self.title = data.get('title')
+        self.url = data.get('url')
+
+    @classmethod
+    async def from_url(cls, url, *, loop=None, stream=False):
+        loop = loop or asyncio.get_event_loop()
+        data = await loop.run_in_executor(None, lambda: ytdl.extract_info(url, download=not stream))
+
+        if 'entries' in data:
+            # take first item from a playlist
+            data = data['entries'][0]
+
+        filename = data['url'] if stream else ytdl.prepare_filename(data)
+        return cls(discord.FFmpegPCMAudio(filename, **ffmpeg_options), data=data)
+
+
+client = commands.Bot(command_prefix='!')
+
+status = ['Jamming out to music!', 'Eating!', 'Sleeping!']
+
+@client.event
+async def on_ready():
+    change_status.start()
+    print('Bot is online!')
+
+@client.event
+async def on_member_join(member):
+    channel = discord.utils.get(member.guild.channels, name='general')
+    await channel.send(f'Welcome {member.mention}!  Ready to jam out? See `?help` command for details!')
+
+@client.command(name='ping', help='This command returns the latency')
+async def ping(ctx):
+    await ctx.send(f'**Pong!** Latency: {round(client.latency * 1000)}ms')
+
+@client.command(name='hello', help='This command returns a random welcome message')
+async def hello(ctx):
+    responses = ['***grumble*** Why did you wake me up?', 'Top of the morning to you lad!', 'Hello, how are you?', 'Hi', '**Wasssuup!**']
+    await ctx.send(choice(responses))
+
+@client.command(name='die', help='This command returns a random last words')
+async def die(ctx):
+    responses = ['why have you brought my short life to an end', 'i could have done so much more', 'i have a family, kill them instead']
+    await ctx.send(choice(responses))
+
+@client.command(name='credits', help='This command returns the credits')
+async def credits(ctx):
+    await ctx.send('Made by `RK Coding`')
+    await ctx.send('Thanks to `DiamondSlasher` for coming up with the idea')
+    await ctx.send('Thanks to `KingSticky` for helping with the `?die` and `?creditz` command')
+
+@client.command(name='creditz', help='This command returns the TRUE credits')
+async def creditz(ctx):
+    await ctx.send('**No one but me, lozer!**')
+
+@client.command(name='play', help='This command plays music')
+async def play(ctx, url):
+    if not ctx.message.author.voice:
+        await ctx.send("You are not connected to a voice channel")
+        return
+
+    else:
+        channel = ctx.message.author.voice.channel
+
+    await channel.connect()
+
+    server = ctx.message.guild
+    voice_channel = server.voice_client
+
+    async with ctx.typing():
+        player = await YTDLSource.from_url(url, loop=client.loop)
+        voice_channel.play(player, after=lambda e: print('Player error: %s' % e) if e else None)
+
+    await ctx.send('**Now playing:** {}'.format(player.title))
+
+@client.command(name='stop', help='This command stops the music and makes the bot leave the voice channel')
+async def stop(ctx):
+    voice_client = ctx.message.guild.voice_client
+    await voice_client.disconnect()
+
+@tasks.loop(seconds=20)
+async def change_status():
+    await client.change_presence(activity=discord.Game(choice(status)))
+
+client.run('ODk0NjM4ODkwODY5MTk4ODk5.YVs7ZQ.wJCM-hGJZI5AkEp3Y2WPItHx5ds')
+
+"""
 # bot.py
 import os
 import discord
+from discord.ext import commands
+import youtube_dl
+from youtube_dl import YoutubeDL
 
-bot = discord.Client()
+client = commands.Bot(command_prefix='!')
 
-prefix = "!"
+@client.command()
+async def play(ctx, url : str):
+    print('play command called')
+    song_there = os.path.isfile("song.mp3")
+    try:
+        if song_there:
+            os.remove("song.mp3")
+    except PermissionError:
+        await ctx.send("Wait for currently playing music to end or use 'stop' command.")
+
+    channel = discord.utils.get(ctx.guild.voice_channels, name='General')
+    voice = discord.utils.get(client.voice_clients, guild=ctx.guild)
+    await channel.connect()
+
+    ydl_opts = {
+        'format': 'bestaudio/best',
+        'postprocessors': [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': 'mp3',
+            'preferredquality': '192',
+        }],
+    }
+
+    with youtube_dl.YoutubeDL(ydl_opts) as ydl:
+        ydl.download([url])
+    for file in os.listdir("C:/Users/megae/Documents/GitHub/MiscDiscordBot/src"):
+        os.rename(file, "song.mp3")
+
+    voice.play(discord.FFmpegPCMAudio('song.mp3'))
 
 
-@bot.event # when it's in a server
+@client.command()
+async def disconnect(ctx):
+    voice = discord.utils.get(client.voice_clients, guild=ctx.guild)
+    await voice.disconnect()
+
+
+@client.command()
+async def dc(ctx):
+    voice = discord.utils.get(client.voice_clients, guild=ctx.guild)
+    await voice.disconnect()
+
+
+@client.command()
+async def pause(ctx):
+    voice = discord.utils.get(client.voice_clients, guild=ctx.guild)
+    if voice.is_playing():
+        voice.pause()
+
+
+@client.command()
+async def resume(ctx):
+    voice = discord.utils.get(client.voice_clients, guild=ctx.guild)
+    voice.resume()
+
+
+@client.command()
+async def stop(ctx):
+    voice = discord.utils.get(client.voice_clients, guild=ctx.guild)
+    voice.stop()
+
+
+client.run("ODk0NjM4ODkwODY5MTk4ODk5.YVs7ZQ.wJCM-hGJZI5AkEp3Y2WPItHx5ds")
+
+@client.event  # when it's in a server
 async def on_ready():
     guild_count = 0
 
-    for guild in bot.guilds:
+    for guild in client.guilds:
         print(f"- {guild.id} (name: {guild.name})")
 
     guild_count = guild_count + 1
@@ -19,12 +205,11 @@ async def on_ready():
     print("Miscellaneous Bot is in " + str(guild_count))
 
 
-@bot.event # when message is sent to a channel
+@client.event  # when message is sent to a channel
 async def on_message(message):
-    if message.content == prefix + "What's up?":
+    if message.content == client.command_prefix + "test":
         await message.channel.send("Whaddup")
-    elif message.content == prefix + "prefix":
-        await message.channel.send(prefix) # TODO: !prefix x changes prefix to x
+    elif message.content == client.command_prefix + "prefix":
+        await message.channel.send(client.command_prefix)  # TODO: !prefix x changes prefix to x
 
-
-bot.run("ODk0NjM4ODkwODY5MTk4ODk5.YVs7ZQ.K2rv7Uaw9gQO7RRFel7_nYB3p_k")
+"""
